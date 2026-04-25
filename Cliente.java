@@ -1,22 +1,23 @@
 import java.io.*;
 import java.net.*;
-import java.util.Random;
+import java.util.*;
 
 public class Cliente {
     public static void main(String[] args) {
         for (int i = 1; i <= 20; i++) {
-            int idCliente = i;
+            int idC = i;
             new Thread(() -> {
-                Random rand = new Random();
+                Random r = new Random();
+                List<Veiculo> garagem = new ArrayList<>();
                 while (true) {
-                    int portaLoja = 6001 + rand.nextInt(3); // Sorteia entre 6001, 6002, 6003
-                    try (Socket s = new Socket("localhost", portaLoja)) {
+                    int porta = 6001 + r.nextInt(3);
+                    try (Socket s = new Socket("localhost", porta)) {
                         ObjectInputStream in = new ObjectInputStream(s.getInputStream());
                         Veiculo v = (Veiculo) in.readObject();
-                        System.out.println("Cliente " + idCliente + " COMPROU: " + v);
-                        Thread.sleep(3000 + rand.nextInt(5000)); // Espera um tempo para comprar outro
+                        garagem.add(v);
+                        System.out.println("Cliente " + idC + " comprou: " + v.id + " (Total: " + garagem.size() + ")");
+                        Thread.sleep(2000 + r.nextInt(3000));
                     } catch (Exception e) {
-                        // Loja vazia ou offline, tenta de novo em breve
                         try { Thread.sleep(1000); } catch (Exception ie) {}
                     }
                 }

@@ -1,73 +1,103 @@
 import java.io.*;
 import java.net.*;
 import java.util.concurrent.*;
-import java.util.concurrent.locks.*;
 
 public class Fabrica {
     private static int pecas = 500;
-    private static int contadorVeiculos = 0;
-    private static BlockingQueue<Veiculo> esteiraCircular = new ArrayBlockingQueue<>(40);
+    private static int contadorId = 0;
+    private static int posEsteira = 0;
+    private static Veiculo[] esteira = new Veiculo[40];
+    
+    private static Semaphore semPecas = new Semaphore(1);
+    private static Semaphore semId = new Semaphore(1);
+    private static Semaphore semEsteiraAcesso = new Semaphore(1);
+    private static Semaphore semSolicitacoes = new Semaphore(5);
+    private static Semaphore itensEsteira = new Semaphore(0);
+    private static Semaphore espacoEsteira = new Semaphore(40);
 
     public static void main(String[] args) throws Exception {
-        System.out.println("Fábrica iniciada. Estoque: 500 peças.");
+        for (int i = 1; i <= 4; i++) {
+            iniciarEstacao(i);
+        }
 
-        // Inicia 4 estações
-        for (int i = 1; i <= 4; i++) iniciarEstacao(i);
-
-        // Servidor para Lojas
         try (ServerSocket server = new ServerSocket(5000)) {
             while (true) {
-                Socket lojaSocket = server.accept();
+                Socket loja = server.accept();
                 new Thread(() -> {
                     try {
-                        Veiculo v = esteiraCircular.take(); // Espera ter veículo
-                        ObjectOutputStream out = new ObjectOutputStream(lojaSocket.getOutputStream());
+                        semSolicitacoes.acquire();
+                        itensEsteira.acquire();
+                        semEsteiraAcesso.acquire();
+                        
+                        Veiculo v = null;
+                        for(int i=0; i<40; i++) {
+                            if(esteira[i] != null) {
+                                v = esteira[i];
+                                esteira[i] = null;
+                                break;
+                            }
+                        }
+                        
+                        semEsteiraAcesso.release();
+                        espacoEsteira.release();
+                        semSolicitacoes.release();
+
+                        ObjectOutputStream out = new ObjectOutputStream(loja.getOutputStream());
                         out.writeObject(v);
-                        System.out.println("Fábrica enviou " + v.id + " para uma loja.");
-                        lojaSocket.close();
+                        out.flush();
+                        loja.close();
                     } catch (Exception e) {}
                 }).start();
             }
-        }
+        } catch (Exception e) {}
     }
 
     private static void iniciarEstacao(int estId) {
-        Lock[] ferramentas = new ReentrantLock[5];
-        for (int i = 0; i < 5; i++) ferramentas[i] = new ReentrantLock();
+        Semaphore[] ferramentas = new Semaphore[5];
+        for (int i = 0; i < 5; i++) ferramentas[i] = new Semaphore(1);
 
         for (int i = 0; i < 5; i++) {
-            int funcId = i;
+            int fId = i;
             new Thread(() -> {
-                String[] cores = {"Vermelho", "Verde", "Azul"};
+                String[] cores = {"R", "G", "B"};
                 String[] tipos = {"SUV", "SEDAN"};
                 while (true) {
-                    Lock f1 = ferramentas[funcId];
-                    Lock f2 = ferramentas[(funcId + 1) % 5];
+                    Semaphore fEsq = ferramentas[fId];
+                    Semaphore fDir = ferramentas[(fId + 1) % 5];
 
-                    if (f1.tryLock()) {
-                        if (f2.tryLock()) {
-                            try {
-                                if (gastarPeca()) {
-                                    int id = proximoId();
-                                    Veiculo v = new Veiculo(id, estId, funcId, cores[id % 3], tipos[id % 2]);
-                                    esteiraCircular.put(v);
+                    try {
+                        if (fEsq.tryAcquire()) {
+                            if (fDir.tryAcquire()) {
+                                semPecas.acquire();
+                                if (pecas > 0) {
+                                    pecas--;
+                                    semPecas.release();
+
+                                    semId.acquire();
+                                    int id = ++contadorId;
+                                    semId.release();
+
+                                    espacoEsteira.acquire();
+                                    semEsteiraAcesso.acquire();
+                                    int pos = (posEsteira++) % 40;
+                                    Veiculo v = new Veiculo(id, estId, fId, cores[id % 3], tipos[id % 2], pos);
+                                    esteira[pos] = v;
                                     System.out.println("Produzido: " + v);
-                                    Thread.sleep(1000); // Tempo de produção
+                                    semEsteiraAcesso.release();
+                                    itensEsteira.release();
+                                    
+                                    Thread.sleep(1000);
+                                } else {
+                                    semPecas.release();
                                 }
-                            } catch (InterruptedException e) {
-                            } finally { f2.unlock(); }
+                                fDir.release();
+                            }
+                            fEsq.release();
                         }
-                        f1.unlock();
-                    }
+                        Thread.sleep(10);
+                    } catch (Exception e) {}
                 }
             }).start();
         }
     }
-
-    private synchronized static boolean gastarPeca() {
-        if (pecas > 0) { pecas--; return true; }
-        return false;
-    }
-
-    private synchronized static int proximoId() { return ++contadorVeiculos; }
 }
